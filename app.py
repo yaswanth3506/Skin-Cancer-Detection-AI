@@ -41,10 +41,37 @@ MODEL_PATH = os.path.join(BASE_DIR, 'models', 'skin_cancer_model.h5')
 CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
 
 if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
-    # CRITICAL FIX: compile=False bypasses serialization/version mismatches between Keras versions
-    model = load_model(MODEL_PATH)
     # Explicitly allow pickle to read text-based string classification arrays safely
     class_names = np.load(CLASSES_PATH, allow_pickle=True)
+    
+    try:
+        # Standard load attempt
+        model = load_model(MODEL_PATH, compile=False)
+    except TypeError as e:
+        # EMERGENCY BYPASS FOR THE DEPLOYMENT MISMATCH:
+        # If older Keras chokes on modern config parameters, we intercept the deserializer
+        import keras
+        try:
+            # Targets modern Keras internal pathways
+            target_layer = keras.src.layers.core.input_layer.InputLayer
+        except AttributeError:
+            # Fallback for alternative structural versions of Keras
+            try:
+                target_layer = keras.layers.InputLayer
+            except AttributeError:
+                target_layer = None
+                
+        if target_layer is not None:
+            orig_from_config = target_layer.from_config
+            def patched_from_config(cls, config):
+                # Dynamically strip the unrecognized parameters before they crash the app
+                config.pop('batch_shape', None)
+                config.pop('optional', None)
+                return orig_from_config(config)
+            target_layer.from_config = classmethod(patched_from_config)
+        
+        # Retry the load cleanly with stripped configs (Weights & Architecture stay untouched)
+        model = load_model(MODEL_PATH, compile=False)
 else:
     model = None
     class_names = ["Error: Model files missing on server"]
@@ -54,7 +81,7 @@ else:
 # ---------------------------------------------------------
 def prepare_image(image_path):
     img = cv2.imread(image_path)
-    # Force target size matching your structural input layout configurations
+    # Force target size matching your structural input layout configurations [64x64]
     img = cv2.resize(img, (64, 64))  
     img = img.astype("float32") / 255.0
     img = np.expand_dims(img, axis=0)
