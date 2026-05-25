@@ -9,13 +9,13 @@ from tensorflow.keras.models import load_model
 app = Flask(__name__)
 app.secret_key = "supersecretkey"  # Change this to a random secret key in production
 
-# Configure SQLite Database
+# Configure SQLite Database Paths
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASE_DIR, 'instance', 'database.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
 
-# Ensure necessary directories exist safely on the cloud file system
+# Ensure necessary system directories exist safely on the cloud filesystem on boot
 os.makedirs(os.path.join(BASE_DIR, 'instance'), exist_ok=True)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -30,7 +30,7 @@ class User(db.Model):
     password = db.Column(db.String(150), nullable=False)
 
 # AUTOMATIC DATABASE INITIALIZATION
-# This block guarantees Render will build the 'user' table on startup
+# Guarantees Render builds the missing 'user' table cleanly on startup
 with app.app_context():
     db.create_all()
 
@@ -41,8 +41,9 @@ MODEL_PATH = os.path.join(BASE_DIR, 'models', 'skin_cancer_model.h5')
 CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
 
 if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
-    model = load_model(MODEL_PATH)
-    # Explicitly set allow_pickle=True to allow text object strings to load safely
+    # CRITICAL FIX: compile=False bypasses serialization/version mismatches between Keras versions
+    model = load_model(MODEL_PATH, compile=False)
+    # Explicitly allow pickle to read text-based string classification arrays safely
     class_names = np.load(CLASSES_PATH, allow_pickle=True)
 else:
     model = None
@@ -53,7 +54,8 @@ else:
 # ---------------------------------------------------------
 def prepare_image(image_path):
     img = cv2.imread(image_path)
-    img = cv2.resize(img, (224, 224))  # Matches model expected input dimension
+    # Force target size matching your structural input layout configurations
+    img = cv2.resize(img, (64, 64))  
     img = img.astype("float32") / 255.0
     img = np.expand_dims(img, axis=0)
     return img
@@ -128,25 +130,25 @@ def predict():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        # Run ML Inference
+        # Run ML Inference pipeline
         processed_img = prepare_image(filepath)
         predictions = model.predict(processed_img)[0]
         
-        # Clear file after processing to save free tier storage disk limits
+        # Proactive clean-up: instantly wipe temporary file to stay within Free Tier disk limits
         if os.path.exists(filepath):
             os.remove(filepath)
             
-        # Structure results dynamically for template presentation
+        # Structure results dynamically for template rendering
         results = [
-            {"class": class_names[i], "probability": round(float(predictions[i]) * 100, 2)}
+            {"class": str(class_names[i]), "probability": round(float(predictions[i]) * 100, 2)}
             for i in range(len(class_names))
         ]
-        # Sort highest probability first
+        # Sort arrays so the maximum diagnostic match displays first
         results = sorted(results, key=lambda x: x['probability'], reverse=True)
         
         return render_template('results.html', results=results, top_match=results[0])
         
-    flash('Model processing engine is offline.', 'danger')
+    flash('Model processing engine is currently offline.', 'danger')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout')
