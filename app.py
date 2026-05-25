@@ -1,48 +1,87 @@
-from flask import Flask, render_template, request, redirect, session, send_from_directory
-from flask_sqlalchemy import SQLAlchemy
 import os
-import uuid
-from PIL import Image
-from utils import predict_image, is_skin_image
+import numpy as np
+import cv2
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.utils import secure_filename
+from tensorflow.keras.models import load_model
 
 app = Flask(__name__)
+app.secret_key = "supersecretkey"  # Change this to a random secret key in production
 
-# Core Settings
-app.config['SECRET_KEY'] = 'skin_cancer_secret_key'
-app.config['UPLOAD_FOLDER'] = 'uploads'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-
-# Database Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+# Configure SQLite Database
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASE_DIR, 'instance', 'database.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
+
+# Ensure necessary directories exist safely on the cloud file system
+os.makedirs(os.path.join(BASE_DIR, 'instance'), exist_ok=True)
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
 db = SQLAlchemy(app)
 
+# ---------------------------------------------------------
+# Database Models
+# ---------------------------------------------------------
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(100), unique=True, nullable=False)
-    password = db.Column(db.String(100), nullable=False)
+    username = db.Column(db.String(150), unique=True, nullable=False)
+    password = db.Column(db.String(150), nullable=False)
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# AUTOMATIC DATABASE INITIALIZATION
+# This block guarantees Render will build the 'user' table on startup
+with app.app_context():
+    db.create_all()
 
+# ---------------------------------------------------------
+# Load Machine Learning Model & Classes
+# ---------------------------------------------------------
+MODEL_PATH = os.path.join(BASE_DIR, 'models', 'skin_cancer_model.h5')
+CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
+
+if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
+    model = load_model(MODEL_PATH)
+    # Explicitly set allow_pickle=True to allow text object strings to load safely
+    class_names = np.load(CLASSES_PATH, allow_pickle=True)
+else:
+    model = None
+    class_names = ["Error: Model files missing on server"]
+
+# ---------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------
+def prepare_image(image_path):
+    img = cv2.imread(image_path)
+    img = cv2.resize(img, (224, 224))  # Matches model expected input dimension
+    img = img.astype("float32") / 255.0
+    img = np.expand_dims(img, axis=0)
+    return img
+
+# ---------------------------------------------------------
+# Routes / Controllers
+# ---------------------------------------------------------
 @app.route('/')
-def home():
-    if 'user' in session:
-        return render_template('home.html', username=session['user'])
-    return redirect('/login')
+def index():
+    return render_template('index.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+        
         existing_user = User.query.filter_by(username=username).first()
         if existing_user:
-            return "Username already exists"
+            flash('Username already exists!', 'danger')
+            return redirect(url_for('register'))
+        
         new_user = User(username=username, password=password)
         db.session.add(new_user)
         db.session.commit()
-        return redirect('/login')
+        flash('Registration successful! Please log in.', 'success')
+        return redirect(url_for('login'))
+        
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -50,108 +89,71 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+        
         user = User.query.filter_by(username=username, password=password).first()
         if user:
-            session['user'] = username
-            return redirect('/')
+            session['user_id'] = user.id
+            session['username'] = user.username
+            flash('Logged in successfully!', 'success')
+            return redirect(url_for('dashboard'))
         else:
-            return "Invalid username or password"
+            flash('Invalid username or password.', 'danger')
+            return redirect(url_for('login'))
+            
     return render_template('login.html')
 
-@app.route('/upload', methods=['GET', 'POST'])
-def upload():
-    if 'user' not in session:
-        return redirect('/login')
+@app.route('/dashboard')
+def dashboard():
+    if 'user_id' not in session:
+        flash('Please log in to access the dashboard.', 'warning')
+        return redirect(url_for('login'))
+    return render_template('dashboard.html', username=session['username'])
 
-    prediction_results = []
-
-    if request.method == 'POST':
-        files = request.files.getlist('images')
-
-        if not files or files[0].filename == '':
-            return "No files selected. Please upload a valid PNG or JPEG image."
-
-        for file in files:
-            if file.filename != '':
-                if not allowed_file(file.filename):
-                    prediction_results.append({
-                        'filename': file.filename,
-                        'unique_filename': '',
-                        'prediction': "Invalid Image (Unsupported format)",
-                        'probability': 0.0,
-                        'next_prediction': 'N/A',
-                        'next_probability': 0.0
-                    })
-                    continue
-
-                unique_filename = str(uuid.uuid4()) + "_" + file.filename
-                filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-                file.save(filepath)
-
-                try:
-                    with Image.open(filepath) as img:
-                        img.verify()
-                except Exception:
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                    prediction_results.append({
-                        'filename': file.filename,
-                        'unique_filename': '',
-                        'prediction': "Invalid Image (Corrupted file)",
-                        'probability': 0.0,
-                        'next_prediction': 'N/A',
-                        'next_probability': 0.0
-                    })
-                    continue
-
-                if not is_skin_image(filepath):
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                    prediction_results.append({
-                        'filename': file.filename,
-                        'unique_filename': '',
-                        'prediction': "Invalid Image",
-                        'probability': 0.0,
-                        'next_prediction': 'N/A',
-                        'next_probability': 0.0
-                    })
-                    continue
-
-                # Run inference tracking both highest options
-                prediction, probability, next_pred, next_prob = predict_image(filepath)
-
-                if prediction == "normal_skin":
-                    display_pred = "No Cancer"
-                else:
-                    display_pred = f"CANCER (type={prediction})"
-
-                if next_pred == "normal_skin":
-                    display_next = "No Cancer"
-                else:
-                    display_next = f"CANCER (type={next_pred})"
-
-                prediction_results.append({
-                    'filename': file.filename,
-                    'unique_filename': unique_filename,
-                    'prediction': display_pred,
-                    'probability': round(probability, 2),
-                    'next_prediction': display_next,
-                    'next_probability': round(next_prob, 2)
-                })
-
-    return render_template('upload.html', prediction_results=prediction_results, username=session['user'])
-
-@app.route('/uploads/<filename>')
-def display_image(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+@app.route('/predict', methods=['POST'])
+def predict():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+        
+    if 'file' not in request.files:
+        flash('No file uploaded', 'danger')
+        return redirect(url_for('dashboard'))
+        
+    file = request.files['file']
+    if file.filename == '':
+        flash('No file selected', 'danger')
+        return redirect(url_for('dashboard'))
+        
+    if file and model is not None:
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Run ML Inference
+        processed_img = prepare_image(filepath)
+        predictions = model.predict(processed_img)[0]
+        
+        # Clear file after processing to save free tier storage disk limits
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            
+        # Structure results dynamically for template presentation
+        results = [
+            {"class": class_names[i], "probability": round(float(predictions[i]) * 100, 2)}
+            for i in range(len(class_names))
+        ]
+        # Sort highest probability first
+        results = sorted(results, key=lambda x: x['probability'], reverse=True)
+        
+        return render_template('results.html', results=results, top_match=results[0])
+        
+    flash('Model processing engine is offline.', 'danger')
+    return redirect(url_for('dashboard'))
 
 @app.route('/logout')
 def logout():
-    session.pop('user', None)
-    return redirect('/login')
+    session.clear()
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    with app.app_context():
-        db.create_all()
     app.run(debug=True)
