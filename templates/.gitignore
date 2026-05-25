@@ -1,0 +1,10 @@
+# Ignore heavy folders and virtual environments
+venv/
+datasets/
+instance/
+uploads/
+skincancer_files/
+models/*.h5
+__pycache__/
+*.jpg
+.DS_Store

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    </head>
+<body class="bg-slate-50 ...">
+    <main>
+        <form action="/predict" method="POST" enctype="multipart/form-data" onsubmit="showLoadingScreen()" class="space-y-4">
+            <label id="dropzone" class="border-2 border-dashed border-slate-300 rounded-xl px-6 py-10 flex flex-col items-center justify-center cursor-pointer">
+                <input type="file" name="file" accept=".jpg, .jpeg, .png" required class="hidden" id="fileField" onchange="handleFileSelection()" multiple>
+                <div id="dropzoneIcon"><i class="fa-solid fa-folder-open text-2xl"></i></div>
+                <p id="dropzoneText" class="text-sm">Select multiple skin samples</p>
+                <div id="counterBadge" class="hidden mt-4 px-3 py-1 bg-rose-50 text-rose-700 text-xs rounded-full"></div>
+            </label>
+            <button type="submit" class="w-full bg-slate-900 text-white py-3 rounded-xl mt-4">Process Batch</button>
+        </form>
+        </main>
+
+    </body>
+</html>
