@@ -10,16 +10,15 @@ app.secret_key = "supersecretkey"
 
 # Configure SQLite Database Paths
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASE_DIR, 'instance', 'database.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
 
 os.makedirs(os.path.join(BASE_DIR, 'instance'), exist_ok=True)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
 
-# Global variables for lazy loading
 model = None
 class_names = None
 
@@ -34,11 +33,13 @@ with app.app_context():
     if not inspector.has_table("user"):
         db.create_all()
 
-# ---------------------------------------------------------
-# Lazy Loading Model Engine
-# ---------------------------------------------------------
+# Dummy class to safely catch Keras 3 structural metadata under Keras 2
+class PatchDTypePolicy:
+    def __init__(self, *args, **kwargs): pass
+    @classmethod
+    def from_config(cls, config): return cls()
+
 def get_model():
-    """Loads the model dynamically on-demand to keep startup times under 2 seconds."""
     global model, class_names
     if model is not None:
         return model, class_names
@@ -47,7 +48,6 @@ def get_model():
     CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
 
     if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
-        # Heavy imports hidden here so they don't slow down server boot
         import tensorflow as tf
         from tensorflow.keras.models import load_model, Sequential
         from tensorflow.keras.layers import Input, Layer
@@ -57,6 +57,7 @@ def get_model():
                 kwargs.pop('data_format', None)
                 kwargs.pop('mode', None)
                 kwargs.pop('seed', None)
+                kwargs.pop('dtype', None) # Pop structural policy keys cleanly
                 super().__init__(*args, **kwargs)
             def call(self, inputs):
                 return inputs
@@ -68,9 +69,12 @@ def get_model():
                 'InputLayer': lambda **kw: Input(shape=(64, 64, 3)),
                 'RandomFlip': SafeLayer,
                 'RandomRotation': SafeLayer,
-                'RandomZoom': SafeLayer
+                'RandomZoom': SafeLayer,
+                'DTypePolicy': PatchDTypePolicy # Safely map out unexpected serialization policies
             }
-            base_model = load_model(MODEL_PATH, compile=False, custom_objects=custom_dict)
+            
+            with tf.keras.utils.custom_object_scope(custom_dict):
+                base_model = load_model(MODEL_PATH, compile=False)
             
             model = Sequential()
             model.add(Input(shape=(64, 64, 3)))
@@ -82,14 +86,11 @@ def get_model():
             print(f"[Lazy Load Error] Failed to reconstruct: {e}")
             model = None
     else:
-        class_names = ["Error: Model files missing"]
+        class_names = ["Engine Error: Model files missing"]
         model = None
         
     return model, class_names
 
-# ---------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------
 def prepare_image(image_path):
     img = cv2.imread(image_path)
     img = cv2.resize(img, (64, 64))  
@@ -97,12 +98,11 @@ def prepare_image(image_path):
     img = np.expand_dims(img, axis=0)
     return img
 
-# ---------------------------------------------------------
-# Routes / Controllers
-# ---------------------------------------------------------
 @app.route('/')
 def index():
-    return render_template('index.html')
+    if 'user_id' in session:
+        return render_template('index.html', username=session['username'])
+    return render_template('index.html', username=None)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -130,7 +130,7 @@ def login():
             session['user_id'] = user.id
             session['username'] = user.username
             flash('Logged in successfully!', 'success')
-            return redirect(url_for('dashboard'))
+            return redirect(url_for('index'))
         else:
             flash('Invalid username or password.', 'danger')
             return redirect(url_for('login'))
@@ -139,7 +139,7 @@ def login():
 @app.route('/dashboard')
 def dashboard():
     if 'user_id' not in session:
-        flash('Please log in to access the dashboard.', 'warning')
+        flash('Please log in to access the workspace.', 'warning')
         return redirect(url_for('login'))
     return render_template('dashboard.html', username=session['username'])
 
@@ -157,7 +157,6 @@ def predict():
         flash('No file selected', 'danger')
         return redirect(url_for('dashboard'))
         
-    # Dynamically pull the model from lazy-loading engine on first click
     active_model, active_classes = get_model()
         
     if file and active_model is not None:
@@ -165,20 +164,29 @@ def predict():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        processed_img = prepare_image(filepath)
-        predictions = active_model.predict(processed_img)[0]
-        
-        if os.path.exists(filepath):
-            os.remove(filepath)
+        try:
+            processed_img = prepare_image(filepath)
+            predictions = active_model.predict(processed_img)[0]
             
-        results = [
-            {"class": str(active_classes[i]), "probability": round(float(predictions[i]) * 100, 2)}
-            for i in range(len(active_classes))
-        ]
-        results = sorted(results, key=lambda x: x['probability'], reverse=True)
-        return render_template('results.html', results=results, top_match=results[0])
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                
+            results = [
+                {"class": str(active_classes[i]), "probability": round(float(predictions[i]) * 100, 2)}
+                for i in range(len(active_classes))
+            ]
+            results = sorted(results, key=lambda x: x['probability'], reverse=True)
+            
+            import tensorflow as tf
+            tf.keras.backend.clear_session() # Defensive RAM recovery step for Render instances
+            
+            return render_template('results.html', results=results, top_match=results[0], username=session['username'])
+        except Exception as e:
+            if os.path.exists(filepath): os.remove(filepath)
+            flash(f"Inference execution failed: {str(e)}", "danger")
+            return redirect(url_for('dashboard'))
         
-    flash('Model processing engine is currently initializing or offline. Try again in a moment.', 'danger')
+    flash('Model processing engine initialization failed. Check your models folder logs.', 'danger')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout')
