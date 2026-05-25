@@ -103,9 +103,15 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
+
 if __name__ == '__main__':
+    # Ensure the instance and uploads folders exist
     os.makedirs(os.path.join(BASE_DIR, 'instance'), exist_ok=True)
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+        
+    # Get the port from the environment, default to 5000 if not found
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
