@@ -42,7 +42,7 @@ CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
 
 if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
     # CRITICAL FIX: compile=False bypasses serialization/version mismatches between Keras versions
-    model = load_model(MODEL_PATH, compile=False)
+    model = load_model(MODEL_PATH)
     # Explicitly allow pickle to read text-based string classification arrays safely
     class_names = np.load(CLASSES_PATH, allow_pickle=True)
 else:
