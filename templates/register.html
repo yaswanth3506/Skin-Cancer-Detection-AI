@@ -1,27 +1,46 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Register</title>
+    <meta charset="UTF-8">
+    <title>Register - DermaScan AI</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-<body>
+<body class="bg-slate-50 flex items-center justify-center min-h-screen">
 
-    <h1>User Registration</h1>
+    <div class="bg-white p-8 rounded-xl shadow-lg w-96 border border-slate-200">
+        <h1 class="text-2xl font-bold text-slate-800 mb-6 text-center">Create Account</h1>
 
-    <form method="POST">
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <div class="bg-rose-100 text-rose-700 p-3 mb-4 rounded text-sm text-center">
+                {{ messages[0] }}
+            </div>
+          {% endif %}
+        {% endwith %}
 
-        <label>Username:</label>
-        <input type="text" name="username" required>
+        <form action="/register" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-700">Username</label>
+                <input type="text" name="username" required 
+                    class="w-full mt-1 p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 outline-none">
+            </div>
 
-        <br><br>
+            <div>
+                <label class="block text-sm font-medium text-slate-700">Password</label>
+                <input type="password" name="password" required 
+                    class="w-full mt-1 p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 outline-none">
+            </div>
 
-        <label>Password:</label>
-        <input type="password" name="password" required>
+            <button type="submit" 
+                class="w-full bg-slate-900 text-white py-2 rounded-lg hover:bg-slate-800 transition font-bold mt-4">
+                Register
+            </button>
+        </form>
 
-        <br><br>
-
-        <button type="submit">Register</button>
-
-    </form>
+        <p class="mt-4 text-center text-sm text-slate-500">
+            Already have an account? <a href="/login" class="text-rose-600 hover:underline">Login here</a>
+        </p>
+    </div>
 
 </body>
 </html>

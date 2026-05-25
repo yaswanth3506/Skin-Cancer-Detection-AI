@@ -1,9 +1,10 @@
 import os
 import numpy as np
 import cv2
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 import tensorflow as tf
 
 app = Flask(__name__)
@@ -39,6 +40,7 @@ def get_model():
     if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
         from tensorflow.keras.models import load_model, Sequential
         from tensorflow.keras.layers import Input
+        
         class_names = np.load(CLASSES_PATH, allow_pickle=True)
         custom_dict = {
             'InputLayer': lambda **kw: Input(shape=(64, 64, 3)),
@@ -65,10 +67,30 @@ def index():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        user = User.query.filter_by(username=username).first()
+        if user and check_password_hash(user.password, password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            return redirect(url_for('dashboard'))
+        flash('Invalid username or password')
     return render_template('login.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        if User.query.filter_by(username=username).first():
+            flash('Username already exists')
+            return redirect(url_for('register'))
+        
+        new_user = User(username=username, password=generate_password_hash(password))
+        db.session.add(new_user)
+        db.session.commit()
+        return redirect(url_for('login'))
     return render_template('register.html')
 
 @app.route('/dashboard')
@@ -103,15 +125,10 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-
 if __name__ == '__main__':
-    # Ensure the instance and uploads folders exist
     os.makedirs(os.path.join(BASE_DIR, 'instance'), exist_ok=True)
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    
     with app.app_context():
         db.create_all()
-        
-    # Get the port from the environment, default to 5000 if not found
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
