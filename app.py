@@ -4,12 +4,9 @@ import cv2
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
-import tensorflow as tf
-from tensorflow.keras.models import load_model, Sequential
-from tensorflow.keras.layers import Input, Layer
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"  # Change this to a random secret key in production
+app.secret_key = "supersecretkey"
 
 # Configure SQLite Database Paths
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -22,15 +19,15 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
 
-# ---------------------------------------------------------
-# Database Models
-# ---------------------------------------------------------
+# Global variables for lazy loading
+model = None
+class_names = None
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(150), nullable=False)
 
-# Enforce dynamic database table schema verification on startup
 with app.app_context():
     from sqlalchemy import inspect
     inspector = inspect(db.engine)
@@ -38,50 +35,57 @@ with app.app_context():
         db.create_all()
 
 # ---------------------------------------------------------
-# Safe Model Reconstruction Layer Stand-ins
+# Lazy Loading Model Engine
 # ---------------------------------------------------------
-class SafeLayer(Layer):
-    """Bypasses training-only data augmentation blocks that break across Keras versions."""
-    def __init__(self, *args, **kwargs):
-        kwargs.pop('data_format', None)
-        kwargs.pop('mode', None)
-        kwargs.pop('seed', None)
-        super().__init__(*args, **kwargs)
-    def call(self, inputs):
-        return inputs
+def get_model():
+    """Loads the model dynamically on-demand to keep startup times under 2 seconds."""
+    global model, class_names
+    if model is not None:
+        return model, class_names
 
-# ---------------------------------------------------------
-# Load Machine Learning Model & Classes Safely
-# ---------------------------------------------------------
-MODEL_PATH = os.path.join(BASE_DIR, 'models', 'skin_cancer_model.h5')
-CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
+    MODEL_PATH = os.path.join(BASE_DIR, 'models', 'skin_cancer_model.h5')
+    CLASSES_PATH = os.path.join(BASE_DIR, 'models', 'class_names.npy')
 
-if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
-    class_names = np.load(CLASSES_PATH, allow_pickle=True)
-    
-    custom_dict = {
-        'InputLayer': lambda **kw: Input(shape=(64, 64, 3)),
-        'RandomFlip': SafeLayer,
-        'RandomRotation': SafeLayer,
-        'RandomZoom': SafeLayer
-    }
-    
-    try:
-        # Load structural weights directly while filtering version mismatch layouts
-        base_model = load_model(MODEL_PATH, compile=False, custom_objects=custom_dict)
+    if os.path.exists(MODEL_PATH) and os.path.exists(CLASSES_PATH):
+        # Heavy imports hidden here so they don't slow down server boot
+        import tensorflow as tf
+        from tensorflow.keras.models import load_model, Sequential
+        from tensorflow.keras.layers import Input, Layer
+
+        class SafeLayer(Layer):
+            def __init__(self, *args, **kwargs):
+                kwargs.pop('data_format', None)
+                kwargs.pop('mode', None)
+                kwargs.pop('seed', None)
+                super().__init__(*args, **kwargs)
+            def call(self, inputs):
+                return inputs
+
+        class_names = np.load(CLASSES_PATH, allow_pickle=True)
         
-        # Explicitly rebuild the functional layers sequential chain
-        model = Sequential()
-        model.add(Input(shape=(64, 64, 3)))
-        for layer in base_model.layers:
-            if layer.__class__.__name__ not in ['RandomFlip', 'RandomRotation', 'RandomZoom', 'InputLayer']:
-                model.add(layer)
-    except Exception as e:
-        print(f"[Model Load Bypass] Reconstructing directly from weights path.")
+        try:
+            custom_dict = {
+                'InputLayer': lambda **kw: Input(shape=(64, 64, 3)),
+                'RandomFlip': SafeLayer,
+                'RandomRotation': SafeLayer,
+                'RandomZoom': SafeLayer
+            }
+            base_model = load_model(MODEL_PATH, compile=False, custom_objects=custom_dict)
+            
+            model = Sequential()
+            model.add(Input(shape=(64, 64, 3)))
+            for layer in base_model.layers:
+                if layer.__class__.__name__ not in ['RandomFlip', 'RandomRotation', 'RandomZoom', 'InputLayer']:
+                    model.add(layer)
+            print("[Lazy Load] AI Model successfully built in memory.")
+        except Exception as e:
+            print(f"[Lazy Load Error] Failed to reconstruct: {e}")
+            model = None
+    else:
+        class_names = ["Error: Model files missing"]
         model = None
-else:
-    model = None
-    class_names = ["Error: Model files missing on server"]
+        
+    return model, class_names
 
 # ---------------------------------------------------------
 # Helper Functions
@@ -105,18 +109,15 @@ def register():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        
         existing_user = User.query.filter_by(username=username).first()
         if existing_user:
             flash('Username already exists!', 'danger')
             return redirect(url_for('register'))
-        
         new_user = User(username=username, password=password)
         db.session.add(new_user)
         db.session.commit()
         flash('Registration successful! Please log in.', 'success')
         return redirect(url_for('login'))
-        
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -124,7 +125,6 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        
         user = User.query.filter_by(username=username, password=password).first()
         if user:
             session['user_id'] = user.id
@@ -134,7 +134,6 @@ def login():
         else:
             flash('Invalid username or password.', 'danger')
             return redirect(url_for('login'))
-            
     return render_template('login.html')
 
 @app.route('/dashboard')
@@ -158,26 +157,28 @@ def predict():
         flash('No file selected', 'danger')
         return redirect(url_for('dashboard'))
         
-    if file and model is not None:
+    # Dynamically pull the model from lazy-loading engine on first click
+    active_model, active_classes = get_model()
+        
+    if file and active_model is not None:
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
         processed_img = prepare_image(filepath)
-        predictions = model.predict(processed_img)[0]
+        predictions = active_model.predict(processed_img)[0]
         
         if os.path.exists(filepath):
             os.remove(filepath)
             
         results = [
-            {"class": str(class_names[i]), "probability": round(float(predictions[i]) * 100, 2)}
-            for i in range(len(class_names))
+            {"class": str(active_classes[i]), "probability": round(float(predictions[i]) * 100, 2)}
+            for i in range(len(active_classes))
         ]
         results = sorted(results, key=lambda x: x['probability'], reverse=True)
-        
         return render_template('results.html', results=results, top_match=results[0])
         
-    flash('Model processing engine is currently offline.', 'danger')
+    flash('Model processing engine is currently initializing or offline. Try again in a moment.', 'danger')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout')
