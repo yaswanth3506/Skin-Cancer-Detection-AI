@@ -53,7 +53,7 @@ def get_model():
         
         os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
         
-        # NOTE: Paste your explicit direct-download storage URL here (e.g., Dropbox with dl=1)
+        # Public hosting direct download URL
         DIRECT_DOWNLOAD_URL = "https://huggingface.co/syaha/skin_cancer_detection_model/resolve/main/skin_cancer_model.h5"
         
         try:
@@ -81,9 +81,24 @@ def get_model():
         def from_config(cls, config):
             return cls()
 
+    # Intercept InputLayer serialization to handle the version mismatch between local environment and server
+    class PatchInputLayer(tf.keras.layers.InputLayer):
+        @classmethod
+        def from_config(cls, config):
+            # Convert Keras 3 'batch_shape' back into traditional standard 'input_shape'
+            if 'batch_shape' in config:
+                bs = config.pop('batch_shape')
+                if bs and len(bs) >= 3:
+                    config['input_shape'] = bs[1:] # Strip batch dimension down to plain (64, 64, 3)
+            # Pop off modern properties completely unknown to older legacy engines
+            if 'optional' in config:
+                config.pop('optional')
+            return super(PatchInputLayer, cls).from_config(config)
+
     try:
-        # Create a dynamic custom object map covering all possible variations of the local layers
+        # Map our structural translation filters directly over the standard loader environment
         custom_objects = {
+            'InputLayer': PatchInputLayer,
             'RandomFlip': PassThroughLayer,
             'RandomRotation': PassThroughLayer,
             'RandomZoom': PassThroughLayer,
@@ -94,7 +109,7 @@ def get_model():
             'Functional': tf.keras.Model
         }
         
-        # Load the whole original layout file with forced structural overrides
+        # Load the layout with custom objects mapping applied
         with tf.keras.utils.custom_object_scope(custom_objects):
             model = load_model(MODEL_PATH, compile=False)
             
