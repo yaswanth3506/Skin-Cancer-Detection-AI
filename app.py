@@ -81,13 +81,16 @@ def get_model():
         def from_config(cls, config):
             return cls()
 
-    # UNIVERSAL DE-SERIALIZATION PATCH: Intercepts every single layer globally 
-    # to translate Keras 3 dictionary properties cleanly into old-school Keras 2 formats
+    # UNIVERSAL DE-SERIALIZATION PATCH: Cleans Keras 3 metadata variations 
+    # and fixes the underlying execution tracking loop
     from keras.src.engine.base_layer import Layer
     original_from_config = Layer.from_config
 
     @classmethod
     def patched_from_config(cls, config):
+        # Create a clean local working copy of the layer layout dictionary
+        config = dict(config)
+        
         # 1. Strip structural DTypePolicy objects back down to flat standard text variables
         if 'dtype' in config and isinstance(config['dtype'], dict):
             config['dtype'] = config['dtype'].get('config', {}).get('name', 'float32')
@@ -99,10 +102,12 @@ def get_model():
                 config['input_shape'] = bs[1:]
                 
         # 3. Clean up loose tracking flags completely unknown to older layout systems
-        if 'optional' in config:
-            config.pop('optional')
+        for unneeded_key in ['optional', 'sparse', 'ragged']:
+            if unneeded_key in config:
+                config.pop(unneeded_key)
             
-        return original_from_config.__fw_orig__ if hasattr(original_from_config, '__fw_orig__') else original_from_config(config)
+        # Call the underlying original function directly using the target class instance to prevent infinite loop
+        return original_from_config.__func__(cls, config)
 
     # Hotpatch the native framework core class method at runtime
     Layer.from_config = patched_from_config
