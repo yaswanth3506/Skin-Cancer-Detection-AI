@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 import base64
 import traceback
+import sys
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -52,6 +53,12 @@ def get_model():
     from tensorflow.keras.layers import Input
     
     try:
+        # --- PATH COMPATIBILITY FIX FOR NUMPY 2.0 MODELS ---
+        if 'numpy._core' not in sys.modules:
+            import numpy
+            sys.modules['numpy._core'] = numpy
+        # ---------------------------------------------------
+
         class_names = np.load(CLASSES_PATH, allow_pickle=True)
         custom_dict = {'RandomFlip': SafeLayer, 'RandomRotation': SafeLayer, 'RandomZoom': SafeLayer}
         
@@ -124,7 +131,6 @@ def dashboard():
 def predict():
     if 'user_id' not in session: return redirect(url_for('login'))
     
-    # Catch structural failures safely to avoid 500 error page
     try:
         files = request.files.getlist('file')
         if not files or files[0].filename == '': 
@@ -178,7 +184,6 @@ def predict():
         return render_template('results.html', results=batch_results)
         
     except Exception as e:
-        # If anything breaks, print the exact trace directly to the browser view
         error_tracking = traceback.format_exc()
         return f"<h3>Inference Pipeline Crash Log:</h3><pre>{error_tracking}</pre>", 500
 
