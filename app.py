@@ -69,7 +69,8 @@ def get_model():
     from tensorflow.keras.models import load_model
     import tensorflow as tf
     
-    # Fully dynamic layer to intercept ANY unrecognized augmentation layer structural configurations
+    # Fully dynamic native Keras 3 custom object decorator to swallow missing data augmentation layers safely
+    @tf.keras.utils.register_keras_serializable(package="Custom")
     class PassThroughLayer(tf.keras.layers.Layer):
         def __init__(self, *args, **kwargs):
             super().__init__()
@@ -81,43 +82,8 @@ def get_model():
         def from_config(cls, config):
             return cls()
 
-    # GLOBAL DICTIONARY SANITIZER: This intercepts raw configuration dictionaries 
-    # and strips out all incompatible Keras 3 keys before layers are instantiated.
-    from keras.src.saving import legacy_sm_saving_lib
-    from keras.src.utils.generic_utils import deserialize_keras_object
-    
-    # Access the underlying raw framework object parser method
-    import keras.src.utils.generic_utils as generic_utils
-    original_deserialize = generic_utils.deserialize_keras_object
-
-    def patched_deserialize(identifier, guessing_scope=None, build_items=None, **kwargs):
-        if isinstance(identifier, dict) and 'config' in identifier:
-            cfg = identifier['config']
-            if isinstance(cfg, dict):
-                # 1. Flatten modern DTypePolicy objects to clear string formats
-                if 'dtype' in cfg and isinstance(cfg['dtype'], dict):
-                    cfg['dtype'] = cfg['dtype'].get('config', {}).get('name', 'float32')
-                
-                # 2. Re-map batch tracking configurations back down to standard inputs
-                if 'batch_shape' in cfg:
-                    bs = cfg.pop('batch_shape')
-                    if bs and len(bs) >= 3:
-                        cfg['input_shape'] = bs[1:]
-                
-                # 3. Clean out all other incompatible parameters known to crash Keras 2 engines
-                incompatible_keys = ['optional', 'sparse', 'ragged', 'quantization_config']
-                for key in incompatible_keys:
-                    if key in cfg:
-                        cfg.pop(key)
-                        
-        # Forward the sanitized dictionary payload safely to the engine parser
-        return original_deserialize(identifier, guessing_scope, build_items, **kwargs)
-
-    # Hotpatch the global engine parser
-    generic_utils.deserialize_keras_object = patched_deserialize
-
     try:
-        # Fallback mapping context for non-standard image augmentation wrappers
+        # Register the fallback mapping variants directly into the system context
         custom_objects = {
             'RandomFlip': PassThroughLayer,
             'RandomRotation': PassThroughLayer,
@@ -125,13 +91,11 @@ def get_model():
             'RandomContrast': PassThroughLayer,
             'RandomHeight': PassThroughLayer,
             'RandomWidth': PassThroughLayer,
-            'SafeLayer': PassThroughLayer,
-            'Functional': tf.keras.Model
+            'SafeLayer': PassThroughLayer
         }
         
-        # Build layout architecture mapping safely
-        with tf.keras.utils.custom_object_scope(custom_objects):
-            model = load_model(MODEL_PATH, compile=False)
+        # In Keras 3, custom_objects are passed natively into load_model directly
+        model = load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
             
         print("--> SUCCESS: True trained AI Model structural weights loaded completely!")
         return model, class_names
