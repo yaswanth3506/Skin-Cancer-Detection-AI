@@ -2,64 +2,57 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Diagnostic Metrics - DermaScan AI</title>
+    <title>Analysis Matrix - DermaScan AI</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex">
+<body class="bg-slate-950 text-slate-100 min-h-screen py-12 px-6 font-sans">
 
-    <aside class="w-64 bg-slate-900 text-slate-200 flex flex-col justify-between p-6 shrink-0">
-        <div>
-            <div class="flex items-center gap-3 mb-8 border-b border-slate-800 pb-4">
-                <i class="fa-solid fa-heart-pulse text-rose-500 text-2xl"></i>
-                <h1 class="text-xl font-bold tracking-wide text-white">DermaScan <span class="text-xs text-rose-400 font-medium">AI</span></h1>
+    <div class="max-w-4xl mx-auto">
+        <div class="flex justify-between items-center border-b border-slate-800 pb-6 mb-8">
+            <div>
+                <h1 class="text-md font-mono tracking-wider text-cyan-400">INFERENCE_LOGS_OUTPUT</h1>
+                <p class="text-xs text-slate-400">Cross-referenced results from your trained model weights.</p>
             </div>
-            <nav class="space-y-2">
-                <a href="/dashboard" class="flex items-center gap-3 px-4 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition">
-                    <i class="fa-solid fa-chart-pie w-5"></i> Back to Dashboard
-                </a>
-            </nav>
+            <a href="/dashboard" class="text-xs bg-slate-900 border border-slate-800 px-4 py-2 rounded text-slate-300 hover:bg-slate-800 transition">← New Intake Scan</a>
         </div>
-        <div class="border-t border-slate-800 pt-4">
-            <a href="/logout" class="flex items-center gap-2 text-slate-500 hover:text-rose-400 transition">
-                <i class="fa-solid fa-right-from-bracket"></i> Logout
-            </a>
-        </div>
-    </aside>
 
-    <main class="flex-1 p-8 max-w-5xl mx-auto w-full">
-        <header class="mb-8">
-            <h2 class="text-2xl font-bold text-slate-900">Batch Diagnostic Report</h2>
-            <p class="text-slate-500 text-sm mt-1">Results for {{ batch_results|length }} processed sample(s).</p>
-        </header>
-
-        {% for sample in batch_results %}
-        <div class="bg-white p-6 mb-8 rounded-2xl border border-slate-200 shadow-sm">
-            <h3 class="font-bold text-lg mb-4 text-slate-800 border-b pb-2">
-                <i class="fa-solid fa-file-image mr-2 text-slate-400"></i>{{ sample.filename }}
-            </h3>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div class="bg-slate-900 text-white p-6 rounded-xl flex flex-col justify-center">
-                    <p class="text-rose-400 text-xs font-bold uppercase tracking-wider">Top Diagnosis</p>
-                    <p class="text-3xl font-black capitalize mt-1">{{ sample.top_match.class.replace('_', ' ') }}</p>
-                    <p class="text-5xl font-mono text-rose-500 mt-2">{{ sample.top_match.probability }}%</p>
+        <div class="space-y-6">
+            {% for r in results %}
+            <div class="bg-slate-900/40 border border-slate-800/80 rounded-xl p-6 flex flex-col sm:flex-row gap-6 items-start backdrop-blur-sm">
+                
+                <div class="w-full sm:w-40 h-40 bg-slate-950 rounded border border-slate-800/60 flex-shrink-0 overflow-hidden flex items-center justify-center shadow-inner">
+                    <img src="data:image/jpeg;base64,{{ r.encoded_img }}" class="w-full h-full object-cover" alt="Source Input">
                 </div>
 
-                <div class="space-y-2">
-                    <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Confidence Distribution</p>
-                    {% for item in sample.full_matrix %}
-                    <div class="text-sm flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-100">
-                        <span class="capitalize font-medium text-slate-700">{{ item.class.replace('_', ' ') }}</span>
-                        <span class="font-bold font-mono text-slate-900">{{ item.probability }}%</span>
+                <div class="flex-1 w-full">
+                    <div class="text-[10px] font-mono text-slate-500 mb-2 tracking-wider uppercase">Target Reference: {{ r.filename }}</div>
+                    
+                    <div class="border p-3.5 rounded font-mono text-xs tracking-wide font-bold mb-4 {{ r.color_class }}">
+                        {{ r.verdict }}
                     </div>
-                    {% endfor %}
+
+                    {% if r.status == "VALID" %}
+                    <div class="space-y-2.5">
+                        <div class="text-[10px] font-mono tracking-widest text-slate-500 uppercase">Probability Metric Distribution:</div>
+                        {% for m in r.matrix %}
+                        <div>
+                            <div class="flex justify-between font-mono text-[11px] text-slate-400 mb-0.5">
+                                <span class="capitalize">{{ m.name }}</span>
+                                <span>{{ m.prob }}%</span>
+                            </div>
+                            <div class="w-full bg-slate-950 h-1 rounded-full overflow-hidden">
+                                <div class="bg-cyan-500 h-full rounded-full" style="width: {{ m.prob }}%"></div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </div>
+
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
-    </main>
+    </div>
 
 </body>
 </html>
