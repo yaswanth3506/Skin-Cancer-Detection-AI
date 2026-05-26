@@ -52,10 +52,20 @@ def get_model():
     from tensorflow.keras.models import load_model
     
     try:
-        # NumPy 2.0 version mismatch patch
+        # --- GLOBAL DEEP MAPPING FOR NUMPY 2.0 COMPATIBILITY ---
+        import numpy
+        # Create dummy module structures to intercept unpickling lookups
         if 'numpy._core' not in sys.modules:
-            import numpy
             sys.modules['numpy._core'] = numpy
+            
+        class DummyCore:
+            pass
+        
+        # Inject multiarray tracking into the dummy structure
+        dummy_core = DummyCore()
+        dummy_core.multiarray = numpy
+        sys.modules['numpy._core.multiarray'] = numpy
+        # -------------------------------------------------------
 
         class_names = np.load(CLASSES_PATH, allow_pickle=True)
         
