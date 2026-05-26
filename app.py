@@ -81,44 +81,35 @@ def get_model():
         def from_config(cls, config):
             return cls()
 
-    # Dynamic baseline layer that catches and safely neutralizes Keras 3 properties globally
-    class PatchLayerMeta(type(tf.keras.layers.Layer)):
-        def __new__(cls, name, bases, attrs):
-            # Intercept class configuration rebuilding method
-            if 'from_config' not in attrs:
-                def from_config(child_cls, config):
-                    # 1. Neutralize advanced DTypePolicy dictionaries back into simple standard string fields
-                    if 'dtype' in config and isinstance(config['dtype'], dict):
-                        config['dtype'] = config['dtype'].get('config', {}).get('name', 'float32')
-                    
-                    # 2. Translate specialized modern input structural formats back to Keras 2 variables
-                    if 'batch_shape' in config:
-                        bs = config.pop('batch_shape')
-                        if bs and len(bs) >= 3:
-                            config['input_shape'] = bs[1:]
-                    if 'optional' in config:
-                        config.pop('optional')
-                        
-                    # Let the parent base class method handle standard execution safely
-                    return super(child_cls, child_cls).from_config(config)
-                attrs['from_config'] = classmethod(from_config)
-            return super().__new__(cls, name, bases, attrs)
+    # UNIVERSAL DE-SERIALIZATION PATCH: Intercepts every single layer globally 
+    # to translate Keras 3 dictionary properties cleanly into old-school Keras 2 formats
+    from keras.src.engine.base_layer import Layer
+    original_from_config = Layer.from_config
+
+    @classmethod
+    def patched_from_config(cls, config):
+        # 1. Strip structural DTypePolicy objects back down to flat standard text variables
+        if 'dtype' in config and isinstance(config['dtype'], dict):
+            config['dtype'] = config['dtype'].get('config', {}).get('name', 'float32')
+        
+        # 2. Map structural Keras 3 inputs back down to traditional matrix shapes
+        if 'batch_shape' in config:
+            bs = config.pop('batch_shape')
+            if bs and len(bs) >= 3:
+                config['input_shape'] = bs[1:]
+                
+        # 3. Clean up loose tracking flags completely unknown to older layout systems
+        if 'optional' in config:
+            config.pop('optional')
+            
+        return original_from_config.__fw_orig__ if hasattr(original_from_config, '__fw_orig__') else original_from_config(config)
+
+    # Hotpatch the native framework core class method at runtime
+    Layer.from_config = patched_from_config
 
     try:
-        # Generate clean translation layers dynamically across the core layer blueprints
-        GlobalPatchInput = PatchLayerMeta('PatchInput', (tf.keras.layers.InputLayer,), {})
-        GlobalPatchConv = PatchLayerMeta('PatchConv', (tf.keras.layers.Conv2D,), {})
-        GlobalPatchPool = PatchLayerMeta('PatchPool', (tf.keras.layers.MaxPooling2D,), {})
-        GlobalPatchDense = PatchLayerMeta('PatchDense', (tf.keras.layers.Dense,), {})
-        GlobalPatchFlatten = PatchLayerMeta('PatchFlatten', (tf.keras.layers.Flatten,), {})
-
-        # Map structural filters directly into the loader environment scope
+        # Map out standard placeholder fallbacks for the data augmentation layers
         custom_objects = {
-            'InputLayer': GlobalPatchInput,
-            'Conv2D': GlobalPatchConv,
-            'MaxPooling2D': GlobalPatchPool,
-            'Dense': GlobalPatchDense,
-            'Flatten': GlobalPatchFlatten,
             'RandomFlip': PassThroughLayer,
             'RandomRotation': PassThroughLayer,
             'RandomZoom': PassThroughLayer,
@@ -129,7 +120,7 @@ def get_model():
             'Functional': tf.keras.Model
         }
         
-        # Load the layout structure safely
+        # Load the configuration structure mapping safely with hotpatched base parsing active
         with tf.keras.utils.custom_object_scope(custom_objects):
             model = load_model(MODEL_PATH, compile=False)
             
