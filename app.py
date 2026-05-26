@@ -4,6 +4,7 @@ import cv2
 import base64
 import traceback
 import sys
+import urllib.request
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -45,14 +46,30 @@ def get_model():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     MODEL_PATH = os.path.join(current_dir, 'models', 'skin_cancer_model.h5')
 
-    if not os.path.exists(MODEL_PATH):
-        print(f"--> CRITICAL PATH ERROR: Cannot find file at: {MODEL_PATH}")
-        return None, class_names
+    # Self-Healing Layer: If file is missing or detected as a tiny Git-LFS text pointer (< 5MB)
+    if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 5 * 1024 * 1024:
+        print("--> WARNING: Local file missing or detected as a tiny Git-LFS placeholder pointer.")
+        print("--> Downloading true binary model weights dynamically...")
+        
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        
+        # NOTE: Paste your explicit direct-download storage URL here (e.g., Dropbox with dl=1)
+        DIRECT_DOWNLOAD_URL = "https://huggingface.co/syaha/skin_cancer_detection_model/resolve/main/skin_cancer_model.h5"
+        
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            req = urllib.request.Request(DIRECT_DOWNLOAD_URL, headers=headers)
+            with urllib.request.urlopen(req) as response, open(MODEL_PATH, 'wb') as out_file:
+                out_file.write(response.read())
+            print(f"--> SUCCESS: Download complete. Target Binary Size: {os.path.getsize(MODEL_PATH)} bytes.")
+        except Exception as dl_err:
+            print(f"--> CRITICAL DOWNLOAD ERROR: {dl_err}")
+            return None, class_names
 
     from tensorflow.keras.models import load_model
     import tensorflow as tf
     
-    # Fully dynamic dictionary to intercept ANY unrecognized augmentation layer structural configurations
+    # Fully dynamic layer to intercept ANY unrecognized augmentation layer structural configurations
     class PassThroughLayer(tf.keras.layers.Layer):
         def __init__(self, *args, **kwargs):
             super().__init__()
