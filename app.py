@@ -20,7 +20,17 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 model = None
-class_names = None
+
+# Hardcoded directly to permanently bypass the pickle compatibility crash
+class_names = np.array([
+    'Actinic keratoses', 
+    'Basal cell carcinoma', 
+    'Benign keratosis', 
+    'Dermatofibroma', 
+    'Melanoma', 
+    'Melanocytic nevi', 
+    'Vascular lesions'
+])
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -43,33 +53,14 @@ def get_model():
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     MODEL_PATH = os.path.join(current_dir, 'models', 'skin_cancer_model.h5')
-    CLASSES_PATH = os.path.join(current_dir, 'models', 'class_names.npy')
 
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(CLASSES_PATH):
-        print(f"--> CRITICAL PATH ERROR: Cannot find files at:\n{MODEL_PATH}\nor\n{CLASSES_PATH}")
-        return None, None
+    if not os.path.exists(MODEL_PATH):
+        print(f"--> CRITICAL PATH ERROR: Cannot find file at: {MODEL_PATH}")
+        return None, class_names
 
     from tensorflow.keras.models import load_model
     
     try:
-        # --- GLOBAL DEEP MAPPING FOR NUMPY 2.0 COMPATIBILITY ---
-        import numpy
-        # Create dummy module structures to intercept unpickling lookups
-        if 'numpy._core' not in sys.modules:
-            sys.modules['numpy._core'] = numpy
-            
-        class DummyCore:
-            pass
-        
-        # Inject multiarray tracking into the dummy structure
-        dummy_core = DummyCore()
-        dummy_core.multiarray = numpy
-        sys.modules['numpy._core.multiarray'] = numpy
-        # -------------------------------------------------------
-
-        class_names = np.load(CLASSES_PATH, allow_pickle=True)
-        
-        # Direct, safe configuration mapping dictionary
         custom_dict = {
             'RandomFlip': SafeLayer, 
             'RandomRotation': SafeLayer, 
@@ -77,17 +68,17 @@ def get_model():
             'SafeLayer': SafeLayer
         }
         
-        # Load the model directly using custom scopes to neutralize augmentation errors
+        # Load the weights into memory using a neutralized layer scope
         with tf.keras.utils.custom_object_scope(custom_dict):
             model = load_model(MODEL_PATH, compile=False)
             
-        print("--> SUCCESS: AI Model and class names loaded completely!")
+        print("--> SUCCESS: AI Model initialized completely!")
         return model, class_names
         
     except Exception as model_err:
         print("--> CORE AI LOADING ERROR DETAILS:")
         traceback.print_exc()
-        return None, None
+        return None, class_names
 
 def is_skin_image(img_bgr):
     try:
@@ -152,7 +143,7 @@ def predict():
         
         active_model, active_classes = get_model()
         if active_model is None:
-            return "<h3>Server Error: The AI model files could not be read or found on Render. Ensure models/ is pushed.</h3>", 500
+            return "<h3>Server Error: The AI model weights file could not be parsed by TensorFlow.</h3>", 500
             
         batch_results = []
 
