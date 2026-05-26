@@ -49,29 +49,33 @@ def get_model():
         print(f"--> CRITICAL PATH ERROR: Cannot find files at:\n{MODEL_PATH}\nor\n{CLASSES_PATH}")
         return None, None
 
-    from tensorflow.keras.models import load_model, Sequential
-    from tensorflow.keras.layers import Input
+    from tensorflow.keras.models import load_model
     
     try:
-        # --- PATH COMPATIBILITY FIX FOR NUMPY 2.0 MODELS ---
+        # NumPy 2.0 version mismatch patch
         if 'numpy._core' not in sys.modules:
             import numpy
             sys.modules['numpy._core'] = numpy
-        # ---------------------------------------------------
 
         class_names = np.load(CLASSES_PATH, allow_pickle=True)
-        custom_dict = {'RandomFlip': SafeLayer, 'RandomRotation': SafeLayer, 'RandomZoom': SafeLayer}
         
+        # Direct, safe configuration mapping dictionary
+        custom_dict = {
+            'RandomFlip': SafeLayer, 
+            'RandomRotation': SafeLayer, 
+            'RandomZoom': SafeLayer,
+            'SafeLayer': SafeLayer
+        }
+        
+        # Load the model directly using custom scopes to neutralize augmentation errors
         with tf.keras.utils.custom_object_scope(custom_dict):
-            base_model = load_model(MODEL_PATH, compile=False)
-        
-        model = Sequential([Input(shape=(64, 64, 3))])
-        for layer in base_model.layers:
-            if layer.__class__.__name__ not in ['RandomFlip', 'RandomRotation', 'RandomZoom', 'InputLayer']:
-                model.add(layer)
+            model = load_model(MODEL_PATH, compile=False)
+            
+        print("--> SUCCESS: AI Model and class names loaded completely!")
         return model, class_names
+        
     except Exception as model_err:
-        print("--> CORE AI LOADING ERROR:")
+        print("--> CORE AI LOADING ERROR DETAILS:")
         traceback.print_exc()
         return None, None
 
