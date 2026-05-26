@@ -81,39 +81,43 @@ def get_model():
         def from_config(cls, config):
             return cls()
 
-    # UNIVERSAL DE-SERIALIZATION PATCH: Cleans Keras 3 metadata variations 
-    # and fixes the underlying execution tracking loop
-    from keras.src.engine.base_layer import Layer
-    original_from_config = Layer.from_config
+    # GLOBAL DICTIONARY SANITIZER: This intercepts raw configuration dictionaries 
+    # and strips out all incompatible Keras 3 keys before layers are instantiated.
+    from keras.src.saving import legacy_sm_saving_lib
+    from keras.src.utils.generic_utils import deserialize_keras_object
+    
+    # Access the underlying raw framework object parser method
+    import keras.src.utils.generic_utils as generic_utils
+    original_deserialize = generic_utils.deserialize_keras_object
 
-    @classmethod
-    def patched_from_config(cls, config):
-        # Create a clean local working copy of the layer layout dictionary
-        config = dict(config)
-        
-        # 1. Strip structural DTypePolicy objects back down to flat standard text variables
-        if 'dtype' in config and isinstance(config['dtype'], dict):
-            config['dtype'] = config['dtype'].get('config', {}).get('name', 'float32')
-        
-        # 2. Map structural Keras 3 inputs back down to traditional matrix shapes
-        if 'batch_shape' in config:
-            bs = config.pop('batch_shape')
-            if bs and len(bs) >= 3:
-                config['input_shape'] = bs[1:]
+    def patched_deserialize(identifier, guessing_scope=None, build_items=None, **kwargs):
+        if isinstance(identifier, dict) and 'config' in identifier:
+            cfg = identifier['config']
+            if isinstance(cfg, dict):
+                # 1. Flatten modern DTypePolicy objects to clear string formats
+                if 'dtype' in cfg and isinstance(cfg['dtype'], dict):
+                    cfg['dtype'] = cfg['dtype'].get('config', {}).get('name', 'float32')
                 
-        # 3. Clean up loose tracking flags completely unknown to older layout systems
-        for unneeded_key in ['optional', 'sparse', 'ragged']:
-            if unneeded_key in config:
-                config.pop(unneeded_key)
-            
-        # Call the underlying original function directly using the target class instance to prevent infinite loop
-        return original_from_config.__func__(cls, config)
+                # 2. Re-map batch tracking configurations back down to standard inputs
+                if 'batch_shape' in cfg:
+                    bs = cfg.pop('batch_shape')
+                    if bs and len(bs) >= 3:
+                        cfg['input_shape'] = bs[1:]
+                
+                # 3. Clean out all other incompatible parameters known to crash Keras 2 engines
+                incompatible_keys = ['optional', 'sparse', 'ragged', 'quantization_config']
+                for key in incompatible_keys:
+                    if key in cfg:
+                        cfg.pop(key)
+                        
+        # Forward the sanitized dictionary payload safely to the engine parser
+        return original_deserialize(identifier, guessing_scope, build_items, **kwargs)
 
-    # Hotpatch the native framework core class method at runtime
-    Layer.from_config = patched_from_config
+    # Hotpatch the global engine parser
+    generic_utils.deserialize_keras_object = patched_deserialize
 
     try:
-        # Map out standard placeholder fallbacks for the data augmentation layers
+        # Fallback mapping context for non-standard image augmentation wrappers
         custom_objects = {
             'RandomFlip': PassThroughLayer,
             'RandomRotation': PassThroughLayer,
@@ -125,7 +129,7 @@ def get_model():
             'Functional': tf.keras.Model
         }
         
-        # Load the configuration structure mapping safely with hotpatched base parsing active
+        # Build layout architecture mapping safely
         with tf.keras.utils.custom_object_scope(custom_objects):
             model = load_model(MODEL_PATH, compile=False)
             
