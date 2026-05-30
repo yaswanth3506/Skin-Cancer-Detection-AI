@@ -73,21 +73,36 @@ def get_model():
         return None, class_names
 def is_skin_image(img_bgr):
     try:
+        # Reject tiny/corrupted images
+        h, w = img_bgr.shape[:2]
+        if h < 50 or w < 50:
+            return False
+
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
         ycrcb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
-        lower_hsv = np.array([0, 15, 0], dtype="uint8")
-        upper_hsv = np.array([25, 170, 255], dtype="uint8")
-        lower_ycrcb = np.array([0, 133, 77], dtype="uint8")
-        upper_ycrcb = np.array([255, 173, 127], dtype="uint8")
+
+        # More tolerant HSV range
+        lower_hsv = np.array([0, 10, 0], dtype="uint8")
+        upper_hsv = np.array([35, 255, 255], dtype="uint8")
+
+        # More tolerant YCrCb range
+        lower_ycrcb = np.array([0, 120, 70], dtype="uint8")
+        upper_ycrcb = np.array([255, 180, 135], dtype="uint8")
+
         mask_hsv = cv2.inRange(hsv, lower_hsv, upper_hsv)
         mask_ycrcb = cv2.inRange(ycrcb, lower_ycrcb, upper_ycrcb)
+
         combined_mask = cv2.bitwise_and(mask_hsv, mask_ycrcb)
+
         skin_pixels = cv2.countNonZero(combined_mask)
-        total_pixels = img_bgr.shape[0] * img_bgr.shape[1]
-        if total_pixels == 0 or (skin_pixels / total_pixels) < 0.20:
-            return False
-        return True
-    except:
+        total_pixels = h * w
+
+        # Reduced threshold from 20% → 5%
+        skin_ratio = skin_pixels / total_pixels
+
+        return skin_ratio >= 0.05
+
+    except Exception:
         return False
 
 @app.route('/')
@@ -166,7 +181,7 @@ def predict():
             
             # Filter 1: Catch uniform baseline/flat guesses
             if predicted_class_raw == "normal_skin":
-                verdict = f"NO CANCER DETECTED - NORMAL SKIN (Confidence: {confidence}%)"
+                verdict = f"NO CANCER DETECTED (Confidence: {confidence}%)"
                 color_class = "bg-green-100 text-green-800 border-green-300"
 
             elif predicted_class_raw in dangerous_types:
@@ -174,7 +189,7 @@ def predict():
                 color_class = "bg-red-100 text-red-800 border-red-300"
 
             else:
-                verdict = f"BENIGN SKIN LESION (Type: \"{predicted_class_raw.upper()}\") (Confidence: {confidence}%)"
+                verdict = f"BENIGN SKIN MARK (Type: \"{predicted_class_raw.upper()}\") (Confidence: {confidence}%)"
                 color_class = "bg-green-100 text-green-800 border-green-300"
                 
             batch_results.append({

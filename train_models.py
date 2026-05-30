@@ -5,6 +5,7 @@ from PIL import Image
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import (
     Conv2D,
@@ -108,6 +109,16 @@ print("Final Classes List:", classes)
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
+class_weights = compute_class_weight(
+    class_weight='balanced',
+    classes=np.unique(y),
+    y=y
+)
+
+class_weights = dict(enumerate(class_weights))
+
+print("Class Weights:")
+print(class_weights)
 
 # -------------------------------
 # ONE HOT ENCODING
@@ -151,7 +162,7 @@ model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accur
 
 # Consider increasing epochs to 15 or 20 later since augmentation makes learning slower but more accurate
 history = model.fit(
-    X_train, y_train, validation_data=(X_test, y_test), epochs=10, batch_size=32
+    X_train, y_train, validation_data=(X_test, y_test), epochs=20, batch_size=32
 )
 
 # -------------------------------
