@@ -9,6 +9,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import tensorflow as tf
+from tensorflow.keras.models import load_model
 
 app = Flask(__name__)
 app.secret_key = "simple_secret_key"
@@ -24,13 +25,14 @@ model = None
 
 # Hardcoded class mapping
 class_names = np.array([
-    'Actinic keratoses', 
-    'Basal cell carcinoma', 
-    'Benign keratosis', 
-    'Dermatofibroma', 
-    'Melanoma', 
-    'Melanocytic nevi', 
-    'Vascular lesions'
+    'Actinic keratoses',
+    'Basal cell carcinoma',
+    'Benign keratosis',
+    'Dermatofibroma',
+    'Melanoma',
+    'Melanocytic nevi',
+    'Vascular lesions',
+    'normal_skin'
 ])
 
 class User(db.Model):
@@ -38,79 +40,37 @@ class User(db.Model):
     username = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(150), nullable=False)
 
-def rebuild_and_load_weights(weights_path):
-    """
-    Rebuilds the standard Sequential CNN architecture explicitly to 
-    completely bypass structural H5 deserialization keyword arguments bugs.
-    """
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Conv2D, MaxPooling2D, BatchNormalization, Flatten, Dense
-    
-    built_model = Sequential([
-        # Input Layer + First Convolutional Block
-        Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(64, 64, 3)),
-        BatchNormalization(),
-        MaxPooling2D((2, 2)),
-        
-        # Second Convolutional Block
-        Conv2D(64, (3, 3), activation='relu', padding='same'),
-        BatchNormalization(),
-        MaxPooling2D((2, 2)),
-        
-        # Third Convolutional Block
-        Conv2D(128, (3, 3), activation='relu', padding='same'),
-        BatchNormalization(),
-        MaxPooling2D((2, 2)),
-        
-        # Dense Classification Head
-        Flatten(),
-        Dense(128, activation='relu'),
-        BatchNormalization(),
-        Dense(7, activation='softmax')  # 7 Melanoma target category classes
-    ])
-    
-    # Load weights directly into the explicitly declared code structure
-    built_model.load_weights(weights_path)
-    return built_model
+
 
 def get_model():
     global model, class_names
-    if model is not None: 
+
+    if model is not None:
         return model, class_names
-    
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
     MODEL_PATH = os.path.join(current_dir, 'models', 'skin_cancer_model.h5')
+    CLASS_PATH = os.path.join(current_dir, 'models', 'class_names.npy')
 
-    # Self-Healing Layer: Download true weights if missing or matching small LFS pointer
-    if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 5 * 1024 * 1024:
-        print("--> WARNING: Local file missing or detected as a tiny Git-LFS placeholder pointer.")
-        print("--> Downloading true binary model weights dynamically...")
-        
-        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-        
-        DIRECT_DOWNLOAD_URL = "https://huggingface.co/syaha/skin_cancer_detection_model/resolve/main/skin_cancer_model.h5"
-        
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            req = urllib.request.Request(DIRECT_DOWNLOAD_URL, headers=headers)
-            with urllib.request.urlopen(req) as response, open(MODEL_PATH, 'wb') as out_file:
-                out_file.write(response.read())
-            print(f"--> SUCCESS: Download complete. Target Binary Size: {os.path.getsize(MODEL_PATH)} bytes.")
-        except Exception as dl_err:
-            print(f"--> CRITICAL DOWNLOAD ERROR: {dl_err}")
-            return None, class_names
-
-    try:
-        # Load structural layer configuration matrices cleanly
-        model = rebuild_and_load_weights(MODEL_PATH)
-        print("--> SUCCESS: True trained AI Model structural weights loaded completely via functional reconstruction!")
-        return model, class_names
-        
-    except Exception as err:
-        print("--> Error rebuilding or parsing original model architecture weights:")
-        traceback.print_exc()
+    if not os.path.exists(MODEL_PATH):
+        print("--> ERROR: Model file not found.")
         return None, class_names
 
+    try:
+        model = load_model(MODEL_PATH)
+
+        if os.path.exists(CLASS_PATH):
+            class_names = np.load(CLASS_PATH, allow_pickle=True)
+
+        print("--> SUCCESS: Full trained model loaded successfully.")
+        print("--> Classes:", class_names)
+
+        return model, class_names
+
+    except Exception:
+        print("--> Error loading trained model:")
+        traceback.print_exc()
+        return None, class_names
 def is_skin_image(img_bgr):
     try:
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
@@ -205,15 +165,16 @@ def predict():
             confidence = round(float(preds[top_idx]) * 100, 2)
             
             # Filter 1: Catch uniform baseline/flat guesses
-            if confidence < 55.0:
-                verdict = f"NORMAL / BENIGN SKIN FEATURE (Confidence: {confidence}%)"
+            if predicted_class_raw == "normal_skin":
+                verdict = f"NO CANCER DETECTED - NORMAL SKIN (Confidence: {confidence}%)"
                 color_class = "bg-green-100 text-green-800 border-green-300"
-            # Filter 2: Route malignant vs harmless lesions explicitly
+
             elif predicted_class_raw in dangerous_types:
                 verdict = f"CANCER RISK DETECTED (Type: \"{predicted_class_raw.upper()}\") (Confidence: {confidence}%)"
                 color_class = "bg-red-100 text-red-800 border-red-300"
+
             else:
-                verdict = f"BENIGN SKIN MARK (Type: \"{predicted_class_raw.upper()}\") (Confidence: {confidence}%)"
+                verdict = f"BENIGN SKIN LESION (Type: \"{predicted_class_raw.upper()}\") (Confidence: {confidence}%)"
                 color_class = "bg-green-100 text-green-800 border-green-300"
                 
             batch_results.append({
