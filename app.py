@@ -38,6 +38,41 @@ class User(db.Model):
     username = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(150), nullable=False)
 
+def rebuild_and_load_weights(weights_path):
+    """
+    Rebuilds the standard Sequential CNN architecture explicitly to 
+    completely bypass structural H5 deserialization keyword arguments bugs.
+    """
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import Conv2D, MaxPooling2D, BatchNormalization, Flatten, Dense
+    
+    built_model = Sequential([
+        # Input Layer + First Convolutional Block
+        Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(64, 64, 3)),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
+        
+        # Second Convolutional Block
+        Conv2D(64, (3, 3), activation='relu', padding='same'),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
+        
+        # Third Convolutional Block
+        Conv2D(128, (3, 3), activation='relu', padding='same'),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
+        
+        # Dense Classification Head
+        Flatten(),
+        Dense(128, activation='relu'),
+        BatchNormalization(),
+        Dense(7, activation='softmax')  # 7 Melanoma target category classes
+    ])
+    
+    # Load weights directly into the explicitly declared code structure
+    built_model.load_weights(weights_path)
+    return built_model
+
 def get_model():
     global model, class_names
     if model is not None: 
@@ -46,14 +81,13 @@ def get_model():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     MODEL_PATH = os.path.join(current_dir, 'models', 'skin_cancer_model.h5')
 
-    # Self-Healing Layer: If file is missing or detected as a tiny Git-LFS text pointer (< 5MB)
+    # Self-Healing Layer: Download true weights if missing or matching small LFS pointer
     if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 5 * 1024 * 1024:
         print("--> WARNING: Local file missing or detected as a tiny Git-LFS placeholder pointer.")
         print("--> Downloading true binary model weights dynamically...")
         
         os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
         
-        # Public hosting direct download URL
         DIRECT_DOWNLOAD_URL = "https://huggingface.co/syaha/skin_cancer_detection_model/resolve/main/skin_cancer_model.h5"
         
         try:
@@ -66,42 +100,14 @@ def get_model():
             print(f"--> CRITICAL DOWNLOAD ERROR: {dl_err}")
             return None, class_names
 
-    from tensorflow.keras.models import load_model
-    import tensorflow as tf
-    
-    # Fully dynamic native Keras 3 custom object decorator to swallow missing data augmentation layers safely
-    @tf.keras.utils.register_keras_serializable(package="Custom")
-    class PassThroughLayer(tf.keras.layers.Layer):
-        def __init__(self, *args, **kwargs):
-            super().__init__()
-        def call(self, inputs):
-            return inputs
-        def get_config(self):
-            return {}
-        @classmethod
-        def from_config(cls, config):
-            return cls()
-
     try:
-        # Register the fallback mapping variants directly into the system context
-        custom_objects = {
-            'RandomFlip': PassThroughLayer,
-            'RandomRotation': PassThroughLayer,
-            'RandomZoom': PassThroughLayer,
-            'RandomContrast': PassThroughLayer,
-            'RandomHeight': PassThroughLayer,
-            'RandomWidth': PassThroughLayer,
-            'SafeLayer': PassThroughLayer
-        }
-        
-        # In Keras 3, custom_objects are passed natively into load_model directly
-        model = load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
-            
-        print("--> SUCCESS: True trained AI Model structural weights loaded completely!")
+        # Load structural layer configuration matrices cleanly
+        model = rebuild_and_load_weights(MODEL_PATH)
+        print("--> SUCCESS: True trained AI Model structural weights loaded completely via functional reconstruction!")
         return model, class_names
         
     except Exception as err:
-        print("--> Error parsing original model architecture layer parameters:")
+        print("--> Error rebuilding or parsing original model architecture weights:")
         traceback.print_exc()
         return None, class_names
 
